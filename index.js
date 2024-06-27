@@ -1,108 +1,160 @@
-const express = require('express')
-const app = express()
-var morgan = require('morgan')
+const express = require('express');
+const app = express();
+const morgan = require('morgan');
+const cors = require('cors');
+const mongoose = require('mongoose');
 
+// Middleware
 morgan.token('body', (req) => JSON.stringify(req.body));
 app.use(morgan(':method :url :status :res[content-length] - :response-time ms :body'));
+app.use(cors());
+app.use(express.static('dist'));
+app.use(express.json());
 
-const cors = require('cors')
-app.use(cors())
+// MongoDB connection
+const password = 'ZwqI0my7zlzH0Yw6';
+const url = `mongodb+srv://alexbecerradev:${password}@phonebookback.jnuo0jy.mongodb.net/?appName=phonebookback`;
 
-app.use(express.static('dist'))
+mongoose.set('strictQuery', false);
 
-let persons = [
-    { 
-        "id": 1,
-        "name": "Arto Hellas", 
-        "number": "040-123456"
-      },
-      { 
-        "id": 2,
-        "name": "Ada Lovelace", 
-        "number": "39-44-5323523"
-      },
-      { 
-        "id": 3,
-        "name": "Dan Abramov", 
-        "number": "12-43-234345"
-      },
-      { 
-        "id": 4,
-        "name": "Mary Poppendieck", 
-        "number": "39-23-6423122"
-      }
-]
-
-app.get('/', (request, response) => {
-  response.send('<h1>Hello World!</h1>')
-})
-
-app.get('/api/persons', (request, response) => {
-  response.json(persons)
-})
-
-app.get('/api/persons/:id', (request, response) => {
-    const id = Number(request.params.id)
-    const person = persons.find(persons => persons.id === id)
-
-    if (person) {
-      response.json(person)
-    } else {
-      response.status(404).end()
-    }
+mongoose.connect(url)
+  .then(() => {
+    console.log('Connected to MongoDB');
   })
+  .catch(error => {
+    console.error('Error connecting to MongoDB:', error);
+  });
 
-  app.post('/api/persons', (request, response) => {
-    const body = request.body;
+  const phoneValidator = [
+  {
+    validator: function (v) {
+      return v.length >= 8;
+    },
+    message: props => `${props.value} is too short. A phone number must have at least 8 characters.`
+  },
+  {
+    validator: function (v) {
+      return /^\d{2,3}-\d+$/.test(v);
+    },
+    message: props => `${props.value} is not a valid phone number. Format should be XX-XXXXXXX or XXX-XXXXXXXX.`
+  }
+];
 
-    // Verificar si el nombre o el número están ausentes en la solicitud
-    if (!body.name || !body.number) {
-        return response.status(400).json({
-            error: 'name or number is missing'
-        });
-    }
-
-    // Verificar si el nombre ya existe en la lista persons
-    const nameExists = persons.some(person => person.name === body.name);
-    if (nameExists) {
-        return response.status(400).json({
-            error: 'name must be unique'
-        });
-    }
-
-    // Si pasa todas las validaciones, agregar la nueva persona
-    const newPerson = {
-        id: generateId(),
-        name: body.name,
-        number: body.number
-    };
-    
-    persons = persons.concat(newPerson);
-    response.json(newPerson);
+// Mongoose schema and model
+const personSchema = new mongoose.Schema({
+  name: {
+    type: String,
+    required: true,
+    unique: true
+  },
+  number: {
+    type: String,
+    required: true,
+    validate: phoneValidator
+  }
 });
 
-function generateId() {
-    const maxId = persons.length > 0 ? Math.max(...persons.map(p => p.id)) : 0;
-    return maxId + 1;
-}
 
-  app.delete('/api/persons/:id', (request, response) => {
-    const id = Number(request.params.id)
-    persons = persons.filter(persons => persons.id !== id)
-  
-    response.status(204).end()
-  })
 
-app.get('/info', (request, response) => {
-    const i = persons.length
-    const currentTime = new Date();
-    console.log(i)
-    const message = '<p>Phonebook has info for ' + i + ' people </p>'
-    const responseHtml = message + `<p>Request received at ${currentTime}</p>`;
-    response.send(responseHtml)
-  })
+const Person = mongoose.model('Person', personSchema);
 
-const PORT = 3001
+// Routes
+app.get('/', (req, res) => {
+  res.send('<h1>Hello World!</h1>');
+});
+
+app.get('/api/persons', (req, res) => {
+  Person.find({}).then(persons => {
+    res.json(persons);
+  });
+});
+
+app.get('/api/persons/:id', (req, res, next) => {
+  Person.findById(req.params.id)
+    .then(person => {
+      if (person) {
+        res.json(person);
+      } else {
+        res.status(404).end();
+      }
+    })
+    .catch(error => next(error));
+});
+
+app.post('/api/persons', (req, res, next) => {
+  const body = req.body;
+
+  if (!body.name || !body.number) {
+    return res.status(400).json({
+      error: 'name or number is missing'
+    });
+  }
+
+  const newPerson = new Person({
+    name: body.name,
+    number: body.number
+  });
+
+  newPerson.save()
+    .then(savedPerson => {
+      res.json(savedPerson);
+    })
+    .catch(error => next(error));
+});
+
+app.put('/api/persons/:id', (req, res, next) => {
+  const body = req.body;
+
+  const person = {
+    name: body.name,
+    number: body.number,
+  };
+
+  app.get('/info', (req, res, next) => {
+    Person.find({})
+      .then(persons => {
+        const totalPersons = persons.length;
+        const currentTime = new Date();
+        res.send(`
+          <p>Phonebook has info for ${totalPersons} people</p>
+          <p>${currentTime}</p>
+        `);
+      })
+      .catch(error => next(error));
+  });
+
+  Person.findByIdAndUpdate(req.params.id, person, { new: true, runValidators: true, context: 'query' })
+    .then(updatedPerson => {
+      res.json(updatedPerson);
+    })
+    .catch(error => next(error));
+});
+
+app.delete('/api/persons/:id', (req, res, next) => {
+  Person.findByIdAndDelete(req.params.id)
+    .then(() => {
+      res.status(204).end();
+    })
+    .catch(error => next(error));
+});
+
+// Middleware de manejo de errores
+const errorHandler = (error, request, response, next) => {
+  console.error(error.message);
+
+  if (error.name === 'CastError' && error.kind === 'ObjectId') {
+    return response.status(400).send({ error: 'malformatted id' });
+  } else if (error.name === 'ValidationError') {
+    return response.status(400).json({ error: error.message });
+  }
+
+  next(error);
+};
+
+app.use(errorHandler);
+
+// Start server
+const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`)
-})
+  console.log(`Server running on port ${PORT}`);
+});
